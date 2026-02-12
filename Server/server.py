@@ -54,78 +54,79 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
     s.bind((HOST, PORT))
     s.listen(1)
 
-    print("[+] Server listening...")
+    while True:
+        print("[+] Server listening...")
 
-    conn, addr = s.accept()
-    with conn:
-        print(f"[+] Connection from {addr}")
+        conn, addr = s.accept()
+        with conn:
+            print(f"[+] Connection from {addr}")
 
-        # Receive AES key
-        raw_len = recv_exact(conn, 4)
-        key_len = struct.unpack(">I", raw_len)[0]
-        enc_key = recv_exact(conn, key_len)
+            # Receive AES key
+            raw_len = recv_exact(conn, 4)
+            key_len = struct.unpack(">I", raw_len)[0]
+            enc_key = recv_exact(conn, key_len)
 
-        aes_key = server_private_key.decrypt(
-            enc_key,
-            padding.OAEP(
-                mgf=padding.MGF1(hashes.SHA256()),
-                algorithm=hashes.SHA256(),
-                label=None
+            aes_key = server_private_key.decrypt(
+                enc_key,
+                padding.OAEP(
+                    mgf=padding.MGF1(hashes.SHA256()),
+                    algorithm=hashes.SHA256(),
+                    label=None
+                )
             )
-        )
 
-        aesgcm = AESGCM(aes_key)
-        print("[+] AES session established")
+            aesgcm = AESGCM(aes_key)
+            print("[+] AES session established")
 
-        # Receive logs
-        while True:
-            try:
-                raw_len = recv_exact(conn, 4)
-                packet_len = struct.unpack(">I", raw_len)[0]
-                packet = recv_exact(conn, packet_len)
+            # Receive logs
+            while True:
+                try:
+                    raw_len = recv_exact(conn, 4)
+                    packet_len = struct.unpack(">I", raw_len)[0]
+                    packet = recv_exact(conn, packet_len)
 
-                nonce = packet[:12]
-                ciphertext = packet[12:]
+                    nonce = packet[:12]
+                    ciphertext = packet[12:]
 
-                plaintext = aesgcm.decrypt(nonce, ciphertext, None)
+                    plaintext = aesgcm.decrypt(nonce, ciphertext, None)
 
-                # Parse
-                log_len = struct.unpack(">I", plaintext[:4])[0]
-                log_entry = plaintext[4:4 + log_len]
-                signature = plaintext[4 + log_len:]
+                    # Parse
+                    log_len = struct.unpack(">I", plaintext[:4])[0]
+                    log_entry = plaintext[4:4 + log_len]
+                    signature = plaintext[4 + log_len:]
 
-                # Verify signature
-                client_public_key.verify(
-                    signature,
-                    log_entry,
-                    padding.PSS(
-                        mgf=padding.MGF1(hashes.SHA256()),
-                        salt_length=padding.PSS.MAX_LENGTH
-                    ),
-                    hashes.SHA256()
-                )
+                    # Verify signature
+                    client_public_key.verify(
+                        signature,
+                        log_entry,
+                        padding.PSS(
+                            mgf=padding.MGF1(hashes.SHA256()),
+                            salt_length=padding.PSS.MAX_LENGTH
+                        ),
+                        hashes.SHA256()
+                    )
 
-                # Server-side timestamp
-                timestamp = int(time.time())
+                    # Server-side timestamp
+                    timestamp = int(time.time())
 
-                # Compute hash chain
-                new_hash = sha256(
-                    last_hash +
-                    log_entry +
-                    struct.pack(">Q", timestamp)
-                )
+                    # Compute hash chain
+                    new_hash = sha256(
+                        last_hash +
+                        log_entry +
+                        struct.pack(">Q", timestamp)
+                    )
 
-                # Store log 
-                with open(LOG_FILE, "ab") as f:
-                    f.write(log_entry + b"\n")
+                    # Store log 
+                    with open(LOG_FILE, "ab") as f:
+                        f.write(log_entry + b"\n")
 
-                # Update state
-                last_hash = new_hash
-                with open(STATE_FILE, "wb") as f:
-                    f.write(last_hash)
+                    # Update state
+                    last_hash = new_hash
+                    with open(STATE_FILE, "wb") as f:
+                        f.write(last_hash)
 
-                print("[+] Log stored | hash:", last_hash.hex())
+                    print("[+] Log stored | hash:", last_hash.hex())
 
-            except Exception as e:
-                print("[!] Connection closed or error:", e)
-                break
+                except Exception as e:
+                    print("[!] Connection closed or error:", e)
+                    break
